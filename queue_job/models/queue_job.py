@@ -353,6 +353,15 @@ class QueueJob(models.Model):
         records._change_job_state(PENDING)
         return True
 
+    def button_delete(self):
+        deletable_states = (DONE, CANCELLED, FAILED, STARTED)
+        records = self.filtered(lambda job_: job_.state in deletable_states)
+        # Release advisory locks for any zombie started jobs before deleting
+        for record in records.filtered(lambda job_: job_.state == STARTED):
+            self.env.cr.execute("SELECT pg_advisory_unlock(%s)", (record.id,))
+        records.unlink()
+        return True
+
     def _message_post_on_failure(self):
         # subscribe the users now to avoid to subscribe them
         # at every job creation

@@ -3,6 +3,7 @@
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
 
 import logging
+import time
 import traceback
 from io import StringIO
 
@@ -36,6 +37,7 @@ class QueueJob(models.Model):
             FROM queue_job
             WHERE state = 'pending'
             AND (eta IS NULL OR eta <= (now() AT TIME ZONE 'UTC'))
+            AND pg_try_advisory_lock(id)
             ORDER BY priority, date_created
             LIMIT 1 FOR NO KEY UPDATE SKIP LOCKED
             """
@@ -51,20 +53,17 @@ class QueueJob(models.Model):
         job.set_started()
         job.store()
         _logger.debug("%s started", job.uuid)
-        # TODO: Commit the state change so that the state can be read from the UI
-        #       while the job is processing. However, doing this will release the
-        #       lock on the db, so we need to find another way.
-        # if commit:
-        #     self.env.flush_all()
-        #     self.env.cr.commit()
+        # Explicitly commit started state without affecting current transaction
+        if commit:
+            self.env.flush_all()
+            self.env.cr.commit()
 
         # Actual processing
         try:
             try:
-                with self.env.cr.savepoint():
-                    job.perform()
-                    job.set_done()
-                    job.store()
+                job.perform()
+                job.set_done()
+                job.store()
             except OperationalError as err:
                 # Automatically retry the typical transaction serialization errors
                 if err.pgcode not in PG_CONCURRENCY_ERRORS_TO_RETRY:
@@ -88,6 +87,8 @@ class QueueJob(models.Model):
                 _logger.error(buff.getvalue())
                 job.set_failed(exc_info=buff.getvalue())
                 job.store()
+        finally:
+            self.env.cr.execute("SELECT pg_advisory_unlock(%s)", (self.id,))
 
         if commit:  # pragma: no cover
             self.env.flush_all()
@@ -100,18 +101,18 @@ class QueueJob(models.Model):
     @api.model
     def _job_runner(self, commit=True):
         """Short-lived job runner, triggered by async crons"""
+        start = time.monotonic()
         job = self._acquire_one_job()
+        buffer = 5
+        limit = tools.config.get('limit_time_real_cron', 0)
         while job:
+            # If we are approaching the end of the time limit for cron jobs, trigger another one
+            if limit > 0 and time.monotonic() - start >= limit - buffer:
+                self._cron_trigger()
+                break
+
             job._process(commit=commit)
             job = self._acquire_one_job()
-            # TODO: If limit_time_real_cron is reached before all the jobs are done,
-            #       the worker will be killed abruptly.
-            #       Ideally, find a way to know if we're close to reaching this limit,
-            #       stop processing, and trigger a new execution to continue.
-            #
-            # if job and limit_time_real_cron_reached_or_about_to_reach:
-            #     self._cron_trigger()
-            #     break
 
     @api.model
     def _cron_trigger(self, at=None):

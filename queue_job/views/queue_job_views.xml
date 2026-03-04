@@ -30,6 +30,14 @@
                         type="object"
                         groups="queue_job.group_queue_job_manager"
                     />
+                    <button
+                        name="button_delete"
+                        invisible="state not in ('done', 'cancelled', 'failed', 'started')"
+                        string="Delete"
+                        type="object"
+                        confirm="Are you sure you want to delete this job? This cannot be undone."
+                        groups="queue_job.group_queue_job_manager"
+                    />
                     <button name="open_related_action" string="Related" type="object" />
                     <field
                         name="state"
@@ -316,6 +324,16 @@
                 />
             </search>
         </field>
+    </record>
+
+    <record id="action_queue_job_delete" model="ir.actions.server">
+        <field name="name">Delete Jobs</field>
+        <field name="model_id" ref="queue_job.model_queue_job"/>
+        <field name="binding_model_id" ref="queue_job.model_queue_job"/>
+        <field name="binding_view_types">list</field>
+        <field name="groups_id" eval="[(4, ref('queue_job.group_queue_job_manager'))]"/>
+        <field name="state">code</field>
+        <field name="code">records.button_delete()</field>
     </record>
 
     <record id="action_queue_job" model="ir.actions.act_window">

@@ -35,7 +35,7 @@ class QueueJob(models.Model):
             """
             SELECT id
             FROM queue_job
-            WHERE state = 'pending'
+            WHERE state = 'pending' OR state = 'started'
             AND (eta IS NULL OR eta <= (now() AT TIME ZONE 'UTC'))
             AND pg_try_advisory_lock(id)
             ORDER BY priority, date_created
